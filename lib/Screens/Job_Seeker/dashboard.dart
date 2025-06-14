@@ -31,8 +31,7 @@ class farmer_dashboard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: const [
                       _ProfileCard(),
-                      SizedBox(height: 40),
-
+                      SizedBox(height: 39),
                       SizedBox(
                         height: 340,
                         child: map_screen(),
