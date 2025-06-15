@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import 'Constant/Forget Password Provider.dart';
+import 'Constant/map_screen_provider.dart';
 import 'Screens/Job_Seeker/Signup_Provider.dart';
 import 'Screens/Job_Seeker/login_provider.dart';
 import 'Top_Nav_Provider.dart';
@@ -34,6 +35,7 @@ void main() async {
         ChangeNotifierProvider(create: (_) => SignUpProvider()),
         ChangeNotifierProvider(create: (_) => LoginProvider()),
         ChangeNotifierProvider(create: (_) => ForgotPasswordProvider()),
+        ChangeNotifierProvider(create: (_) => MapDrawingProvider()),
         ChangeNotifierProvider(create: (_) => TopNavProvider()),
       ],
       child: const JobPortalApp(),

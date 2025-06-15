@@ -1,459 +1,589 @@
-import 'dart:async';
-import 'dart:math'; // for scale calculation
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
+import 'package:flutter_google_maps_webservices/places.dart';
+import 'package:flutter_svg/svg.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
-import '../Screens/Job_Seeker/Dashboard_Provider.dart';
 
-/// ─── map_screen (Horizontal) ─────────────────────────────────────────────
-/// Displays a horizontal, infinite-looping, auto-scrolling list of job cards.
-/// Shows exactly 3 cards in the viewport at once via `viewportFraction`,
-/// with scaling animation on side cards (making them smaller) and
-/// a slightly enlarged center card. Also includes dot indicators below.
-class map_screen extends StatefulWidget {
-  const map_screen({Key? key}) : super(key: key);
+import 'farm_list_view.dart';
+import 'map_screen_provider.dart';
+
+class Map_Screen extends StatefulWidget {
+  const Map_Screen({super.key});
 
   @override
-  State<map_screen> createState() => _map_screenState();
+  _MapScreenState createState() => _MapScreenState();
 }
 
-class _map_screenState extends State<map_screen> {
-  late final PageController _pageController;
-  int _currentPage = 0;
-  Timer? _autoScrollTimer;
+class _MapScreenState extends State<Map_Screen>
+    with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
 
-  List<Job> get _jobs => context.read<JobProvider>().jobs;
-  static const int _kLoopOffset = 1000;
+  // Animation controllers for smooth transitions
+  late AnimationController _overlayController;
+  late AnimationController _mapController;
+  late Animation<double> _overlayAnimation;
+  late Animation<double> _mapAnimation;
+
+  bool _showOverlay = true;
+  bool _isMapReady = false;
+  GoogleMapController? mapController;
+
+  // Performance optimization: Singleton places instance
+  static final places = GoogleMapsPlaces(
+      apiKey: "AIzaSyBqEb5qH08mSFysEOfSTIfTezbhJjJZSRs"
+  );
+
+  @override
+  bool get wantKeepAlive => true; // Keep state alive for performance
 
   @override
   void initState() {
     super.initState();
+    _initializeAnimations();
+    _startLoadingSequence();
+  }
 
-    if (_jobs.isNotEmpty) {
-      final initialPage = _jobs.length * _kLoopOffset;
-      _pageController = PageController(
-        initialPage: initialPage,
-        viewportFraction: 0.33, // show exactly 3 cards at once
-      );
-      _currentPage = initialPage;
+  void _initializeAnimations() {
+    // Overlay fade animation
+    _overlayController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _overlayAnimation = CurvedAnimation(
+      parent: _overlayController,
+      curve: Curves.easeInOut,
+    );
 
-      _autoScrollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-        if (_jobs.isEmpty) return;
-        _pageController.nextPage(
-          duration: const Duration(milliseconds: 600),
-          curve: Curves.easeInOut,
-        );
-      });
-    } else {
-      // Fallback if no jobs are loaded yet
-      _pageController = PageController(
-        initialPage: 0,
-        viewportFraction: 0.33,
-      );
-      _currentPage = 0;
-    }
+    // Map reveal animation
+    _mapController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: this,
+    );
+    _mapAnimation = CurvedAnimation(
+      parent: _mapController,
+      curve: Curves.easeOutCubic,
+    );
+
+    _overlayController.forward();
+  }
+
+  void _startLoadingSequence() {
+    // Simulate map loading with graceful transitions
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() => _isMapReady = true);
+        _mapController.forward();
+
+        // Start overlay fade out after map is ready
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _overlayController.reverse().then((_) {
+              if (mounted) {
+                setState(() => _showOverlay = false);
+              }
+            });
+          }
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
-    _autoScrollTimer?.cancel();
-    _pageController.dispose();
+    _overlayController.dispose();
+    _mapController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final jobs = _jobs;
-    if (jobs.isEmpty) {
-      return const Center(child: Text('No jobs available'));
-    }
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
 
-    return RepaintBoundary(
-      child: Column(
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F8FA),
+      body: Stack(
         children: [
-          // ─── Carousel ──────────────────────────────────
-          SizedBox(
-            height: 300,
-            child: PageView.builder(
-              controller: _pageController,
-              scrollDirection: Axis.horizontal,
-              onPageChanged: (int page) {
-                setState(() {
-                  _currentPage = page;
-                });
-              },
-              itemBuilder: (context, rawIndex) {
-                final index = rawIndex % jobs.length;
-                final job = jobs[index];
-
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: _CarouselCardScaleWrapper(
-                    pageController: _pageController,
-                    rawIndex: rawIndex,
-                    child: _JobCardDetailed(job: job),
-                  ),
-                );
-              },
-            ),
+          // Main content with fade-in animation
+          AnimatedBuilder(
+            animation: _mapAnimation,
+            builder: (context, child) {
+              return Opacity(
+                opacity: _mapAnimation.value,
+                child: Transform.scale(
+                  scale: 0.95 + (0.05 * _mapAnimation.value),
+                  child: _buildMainContent(),
+                ),
+              );
+            },
           ),
 
-          // ─── Dots Indicator ───────────────────────────
-          Padding(
-            padding: const EdgeInsets.only(top: 12, bottom: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(jobs.length, (i) {
-                final isActive = (_currentPage % jobs.length) == i;
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  width: isActive ? 12 : 8,
-                  height: isActive ? 12 : 8,
-                  decoration: BoxDecoration(
-                    color: isActive
-                        ? Theme.of(context).primaryColor
-                        : Colors.grey.shade400,
-                    shape: BoxShape.circle,
-                  ),
+          // Loading overlay with fade animation
+          if (_showOverlay)
+            AnimatedBuilder(
+              animation: _overlayAnimation,
+              builder: (context, child) {
+                return Opacity(
+                  opacity: _overlayAnimation.value,
+                  child: _buildLoadingOverlay(),
                 );
-              }),
+              },
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMainContent() {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            children: [
+              Expanded(
+                child: _buildMapContainer(),
+              ),
+              const SizedBox(height: 30),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMapContainer() {
+    return Container(
+      margin: const EdgeInsets.all(8.0),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20.0),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            spreadRadius: 2,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20.0),
+        child: Stack(
+          children: [
+            // Background placeholder while map loads
+            if (!_isMapReady)
+              Container(
+                color: Colors.grey[200],
+                child: const Center(
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4C6B3C)),
+                  ),
+                ),
+              ),
+
+            // Optimized Google Map
+            _buildOptimizedMap(),
+
+            // Map controls overlay
+            _buildMapControls(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOptimizedMap() {
+    return Selector<MapDrawingProvider, _MapState>(
+      selector: (context, provider) => _MapState(
+        toolSelected: provider.toolSelected,
+        currentTool: provider.currentTool,
+        isDrawing: provider.isDrawing,
+        mapType: provider.mapType,
+        initialPoint: provider.initialPoint,
+      ),
+      builder: (context, mapState, child) {
+        return _OptimizedMapGestureHandler(
+          child: Consumer<MapDrawingProvider>(
+            builder: (context, provider, child) {
+              return GoogleMap(
+                onMapCreated: _onMapCreated,
+                initialCameraPosition: CameraPosition(
+                  target: mapState.initialPoint,
+                  zoom: 15, // Reduced initial zoom for faster loading
+                ),
+                // Performance optimizations
+                liteModeEnabled: false, // Keep interactive for drawing
+                trafficEnabled: false,
+                buildingsEnabled: true,
+                indoorViewEnabled: false,
+
+                // Gesture controls based on current tool
+                scrollGesturesEnabled: provider.isMapInteractionAllowed(),
+                rotateGesturesEnabled: provider.isMapInteractionAllowed(),
+                tiltGesturesEnabled: provider.isMapInteractionAllowed(),
+                zoomGesturesEnabled: provider.isMapInteractionAllowed(),
+
+                // UI controls
+                myLocationButtonEnabled: false, // We'll create custom button
+                myLocationEnabled: true,
+                compassEnabled: false, // Custom compass
+
+                // Map overlays - only rebuild when necessary
+                polygons: provider.allPolygons,
+                polylines: provider.allPolylines,
+                markers: provider.allMarkers,
+                circles: provider.allCircles,
+                mapType: mapState.mapType,
+
+                onTap: (latLng) {
+                  if (mapState.currentTool == "marker") {
+                    provider.addMarkerAndUpdatePolyline(context, latLng);
+                  }
+                },
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMapControls() {
+    return Positioned(
+      bottom: 30,
+      left: 20,
+      child: Column(
+        children: [
+          // Map type selector with smooth animation
+          _buildAnimatedMapControl(
+            icon: Icons.layers,
+            onTap: () => _showMapTypeSelector(context),
+            tooltip: 'Map Layers',
+          ),
+          const SizedBox(height: 12),
+
+          // My location button
+          _buildAnimatedMapControl(
+            icon: Icons.my_location,
+            onTap: _goToMyLocation,
+            tooltip: 'My Location',
           ),
         ],
       ),
     );
   }
-}
 
-/// ─── _CarouselCardScaleWrapper ───────────────────────────────────────────
-/// Wraps each job card in an AnimatedBuilder so that only that card
-/// rebuilds/scales in response to scrolling, rather than the entire PageView.
-class _CarouselCardScaleWrapper extends StatelessWidget {
-  final PageController pageController;
-  final int rawIndex;
-  final Widget child;
+  Widget _buildAnimatedMapControl({
+    dynamic icon,
+    required VoidCallback onTap,
+    required String tooltip,
+  }) {
+    return TweenAnimationBuilder<double>(
+      duration: const Duration(milliseconds: 300),
+      tween: Tween(begin: 0.0, end: 1.0),
+      builder: (context, value, child) {
+        return Transform.scale(
+          scale: value,
+          child: Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(28),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(28),
+                onTap: onTap,
+                child: Tooltip(
+                  message: tooltip,
+                  child: Center(
+                    child: icon is IconData
+                        ? Icon(icon, size: 24, color:Color(0xFF4C6B3C))
+                        : Image.asset(
+                      icon,
+                      width: 24,
+                      height: 24,
 
-  const _CarouselCardScaleWrapper({
-    required this.pageController,
-    required this.rawIndex,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: pageController,
-      builder: (context, __) {
-        final pageValue = pageController.hasClients
-            ? pageController.page ?? pageController.initialPage.toDouble()
-            : pageController.initialPage.toDouble();
-        final difference = (pageValue - rawIndex).abs();
-        final scale = max(0.7, 1.0 - difference * 0.15);
-
-        // Center the scaled card within a fixed-height box so that
-        // vertical layout never shifts as scale changes
-        return SizedBox(
-          height: 300,
-          child: Center(
-            child: Transform.scale(
-              scale: scale,
-              child: child,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         );
       },
-      child: child, // prevents rebuilding the child subtree on every tick
     );
   }
-}
 
-/// ─── _JobCardDetailed (Rectangular, Rounded Corners, Elegant) ─────────────────────────
-/// A single card showing job details, “Read More” & “Apply Now” buttons.
-/// Uses a neutral palette, subtle shadows, and ensures that card content
-/// is vertically scrollable if it exceeds the allotted height.
-class _JobCardDetailed extends StatelessWidget {
-  final Job job;
-  const _JobCardDetailed({required this.job});
-
-  @override
-  Widget build(BuildContext context) {
-    final primaryColor = Theme.of(context).primaryColor;
-    const textColor = Colors.black87;
-    const secondaryTextColor = Color(0xFF5C738A);
-
-    return MouseRegion(
-      onEnter: (_) {},
-      onExit: (_) {},
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeInOut,
-        width: MediaQuery.of(context).size.width * 0.6, // matches viewportFraction * screen width
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.08),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
+  Widget _buildLoadingOverlay() {
+    return Container(
+      color: Colors.white.withOpacity(0.95),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Optimized Lottie animation
+            SizedBox(
+              width: 200,
+              height: 200,
+              child: Lottie.asset(
+                'images/loading.json',
+                fit: BoxFit.contain,
+                repeat: true,
+                animate: _showOverlay,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Loading Farms...',
+              style: GoogleFonts.inter(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Please wait while we fetch your location',
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                color: Colors.grey[500],
+              ),
             ),
           ],
-        ),
-        // Ensure the full card content can scroll vertically if needed
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // ─── Header: Placeholder Logo + Title & Company (with "Full‐time" chip) ───
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Placeholder “logo” box (swap for NetworkImage if desired)
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade200,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(
-                          Icons.work_outline,
-                          color: Colors.grey,
-                          size: 20,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Job Title
-                            Text(
-                              job.title,
-                              style: GoogleFonts.montserrat(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                                color: textColor,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            // Company Name and "Full‐time" chip in the same row
-                            Row(
-                              children: [
-                                Text(
-                                  job.company,
-                                  style: GoogleFonts.montserrat(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.black54,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: Colors.green.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Text(
-                                    'Full‐time',
-                                    style: GoogleFonts.montserrat(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: Colors.green.shade700,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // ─── Divider ───
-                const Divider(height: 1, thickness: 1, color: Color(0xFFE0E0E0)),
-
-                // ─── Body: Location & Salary + Description Label ───
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Location & Salary row
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.location_on_outlined,
-                            size: 14,
-                            color: Color(0xFF5C738A),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            job.location,
-                            style: GoogleFonts.montserrat(
-                              fontSize: 12,
-                              color: secondaryTextColor,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          const Icon(
-                            Icons.attach_money,
-                            size: 14,
-                            color: Color(0xFF5C738A),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            job.salary,
-                            style: GoogleFonts.montserrat(
-                              fontSize: 12,
-                              color: secondaryTextColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-
-                      // Description label
-                      Text(
-                        'Job Description:',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: textColor,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum.',
-                        maxLines: 4,
-                        overflow: TextOverflow.ellipsis,
-                        style: GoogleFonts.montserrat(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.black54,
-                        ),
-                      ),
-
-                      const SizedBox(height: 12),
-                      // ─── Buttons Row: Read More & Apply Now ───
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // “Read More” (outlined)
-                          OutlinedButton(
-                            onPressed: () {
-                              // TODO: Navigate to detailed view
-                            },
-                            style: ButtonStyle(
-                              side: WidgetStateProperty.all(
-                                BorderSide(color: primaryColor),
-                              ),
-                              shape: WidgetStateProperty.all(
-                                RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                              ),
-                              padding: WidgetStateProperty.all(
-                                const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
-                              ),
-                            ),
-                            child: Text(
-                              'Read More',
-                              style: GoogleFonts.montserrat(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: primaryColor,
-                              ),
-                            ),
-                          ),
-
-                          TextButton(
-                            style: TextButton.styleFrom(
-                              backgroundColor: primaryColor.withOpacity(0.1),
-                              padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 15),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            onPressed: () {
-                              // Navigate to full profile page if needed:
-                              // context.go('/profile');
-                            },
-                            child: Text(
-                              'Apply Now',
-                              style: GoogleFonts.montserrat(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: primaryColor,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     );
   }
-}
 
-/// ─── Placeholder for the Profile Card ─────────────────────────────────────
-/// This would be your actual profile‐card widget. Replace with your own.
-class _ProfileCard extends StatelessWidget {
-  const _ProfileCard({Key? key}) : super(key: key);
+  void _onMapCreated(GoogleMapController controller) async {
+    mapController = controller;
+    final provider = Provider.of<MapDrawingProvider>(context, listen: false);
+    provider.setMapController(context, controller);
 
-  @override
-  Widget build(BuildContext context) {
-    // Example static placeholder:
+    // Animate to user location after map is ready
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (mounted) {
+      await controller.animateCamera(
+        CameraUpdate.newLatLngZoom(provider.initialPoint, 16),
+      );
+    }
+  }
+
+  void _goToMyLocation() async {
+    final provider = Provider.of<MapDrawingProvider>(context, listen: false);
+    if (provider.mapController != null) {
+      await provider.mapController!.animateCamera(
+        CameraUpdate.newLatLngZoom(provider.initialPoint, 18),
+      );
+    }
+  }
+
+  void _showMapTypeSelector(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _buildMapTypeBottomSheet(),
+    );
+  }
+
+  Widget _buildMapTypeBottomSheet() {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
+      margin: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 20,
+            spreadRadius: 2,
           ),
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            'John Doe',
-            style: GoogleFonts.montserrat(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
+          // Handle bar
+          Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(top: 12),
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Flutter Developer',
-            style: GoogleFonts.montserrat(
-              fontSize: 16,
-              color: Colors.grey.shade700,
+
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                Text(
+                  'Map Style',
+                  style: GoogleFonts.inter(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                Consumer<MapDrawingProvider>(
+                  builder: (context, provider, child) {
+                    return Column(
+                      children: provider.mapTypes.map((mapType) {
+                        final isSelected = provider.mapType == mapType;
+                        final typeName = mapType.toString().split('.').last;
+
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: isSelected ? Colors.blue[50] : Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: isSelected ? Color(0xFF4C6B3C) : Colors.grey[300]!,
+                              width: isSelected ? 2 : 1,
+                            ),
+                          ),
+                          child: ListTile(
+                            leading: Icon(
+                              isSelected ? Icons.check_circle : Icons.map,
+                              color: isSelected ? Color(0xFF4C6B3C) : Colors.grey[600],
+                            ),
+                            title: Text(
+                              typeName.replaceAll('_', ' ').toUpperCase(),
+                              style: GoogleFonts.inter(
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                                color: isSelected ? Color(0xFF4C6B3C) : Colors.grey[700],
+                              ),
+                            ),
+                            onTap: () {
+                              provider.setMapType(mapType);
+                              Navigator.pop(context);
+                            },
+                          ),
+                        );
+                      }).toList(),
+                    );
+                  },
+                ),
+              ],
             ),
           ),
-          // Add whatever other profile details you need here...
         ],
       ),
     );
   }
+}
+
+// Optimized gesture handler to reduce rebuilds
+class _OptimizedMapGestureHandler extends StatefulWidget {
+  final Widget child;
+
+  const _OptimizedMapGestureHandler({required this.child});
+
+  @override
+  State<_OptimizedMapGestureHandler> createState() => _OptimizedMapGestureHandlerState();
+}
+
+class _OptimizedMapGestureHandlerState extends State<_OptimizedMapGestureHandler> {
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onPanStart: _onPanStart,
+      onPanUpdate: _onPanUpdate,
+      onPanEnd: _onPanEnd,
+      child: widget.child,
+    );
+  }
+
+  void _onPanStart(DragStartDetails details) async {
+    final provider = Provider.of<MapDrawingProvider>(context, listen: false);
+    if (provider.toolSelected && provider.mapController != null) {
+      try {
+        final point = await provider.mapController!.getLatLng(
+          ScreenCoordinate(
+            x: details.localPosition.dx.toInt(),
+            y: details.localPosition.dy.toInt(),
+          ),
+        );
+        provider.startDrawing(provider.currentTool, point);
+      } catch (e) {
+        debugPrint("Error getting LatLng: $e");
+      }
+    }
+  }
+
+  void _onPanUpdate(DragUpdateDetails details) async {
+    final provider = Provider.of<MapDrawingProvider>(context, listen: false);
+    if (provider.isDrawing && provider.mapController != null) {
+      try {
+        final point = await provider.mapController!.getLatLng(
+          ScreenCoordinate(
+            x: details.localPosition.dx.toInt(),
+            y: details.localPosition.dy.toInt(),
+          ),
+        );
+        provider.updateDrawing(point);
+      } catch (e) {
+        debugPrint("Error updating drawing: $e");
+      }
+    }
+  }
+
+  void _onPanEnd(DragEndDetails details) {
+    final provider = Provider.of<MapDrawingProvider>(context, listen: false);
+    if (provider.isDrawing) {
+      provider.finalizeDrawing(context);
+    }
+  }
+}
+
+// State class for efficient Selector usage
+class _MapState {
+  final bool toolSelected;
+  final String currentTool;
+  final bool isDrawing;
+  final MapType mapType;
+  final LatLng initialPoint;
+
+  _MapState({
+    required this.toolSelected,
+    required this.currentTool,
+    required this.isDrawing,
+    required this.mapType,
+    required this.initialPoint,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+          other is _MapState &&
+              runtimeType == other.runtimeType &&
+              toolSelected == other.toolSelected &&
+              currentTool == other.currentTool &&
+              isDrawing == other.isDrawing &&
+              mapType == other.mapType &&
+              initialPoint == other.initialPoint;
+
+  @override
+  int get hashCode =>
+      toolSelected.hashCode ^
+      currentTool.hashCode ^
+      isDrawing.hashCode ^
+      mapType.hashCode ^
+      initialPoint.hashCode;
 }

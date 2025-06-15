@@ -11,6 +11,7 @@ import 'Screens/Job_Seeker/Sign Up.dart';
 import 'Screens/Job_Seeker/dashboard.dart';
 
 import 'Constant/Splash.dart';
+import 'Screens/Job_Seeker/device_registration.dart';
 
 class AuthNotifier extends ChangeNotifier {
   late final StreamSubscription<User?> _authSubscription;
@@ -141,6 +142,14 @@ final GoRouter router = GoRouter(
     path: '/dashboard',
     pageBuilder: (context, state) => _buildPageWithAnimation(
       child:  farmer_dashboard(),
+      context: context,
+      state: state,
+    ),
+  ),
+ GoRoute(
+    path: '/device-registration',
+    pageBuilder: (context, state) => _buildPageWithAnimation(
+      child:  device_registration(),
       context: context,
       state: state,
     ),

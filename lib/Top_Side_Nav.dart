@@ -1,12 +1,27 @@
 // top_nav.dart
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_google_maps_webservices/places.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:latlong2/latlong.dart' hide LatLng;
 import 'package:provider/provider.dart';
+import 'Constant/Map_Screen.dart';
+import 'Constant/map_screen_provider.dart';
 import 'Screens/Job_Seeker/Login.dart';
 import 'Top_Nav_Provider.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_google_maps_webservices/places.dart';
+import 'package:flutter_svg/svg.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:lottie/lottie.dart';
+import 'package:provider/provider.dart';
+
 
 class MainLayout extends StatefulWidget {
   final Widget child;
@@ -24,20 +39,26 @@ class MainLayout extends StatefulWidget {
 }
 
 class _MainLayoutState extends State<MainLayout> {
+  final places = GoogleMapsPlaces(apiKey: "AIzaSyBqEb5qH08mSFysEOfSTIfTezbhJjJZSRs");
+
   bool _isFocused = false;
   final FocusNode _focusNode = FocusNode();
-  final Color _cardWhite = Color(0xFFFFFFFF);
   final Color _textPrimary = Color(0xFF1E293B);
   final Color _textSecondary = Color(0xFF64748B);
-  final Color _borderColor = Color(0xFFE2E8F0);
-  final Color _hoverColor = Color(0xFFF1F5F9);
-  final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
-  final bool _isSearchFocused = false;
+  Timer? _searchDebounceTimer;
+  final ScrollController _scrollController = ScrollController();
+  final TextEditingController _controller = TextEditingController();
+  List<Prediction> _predictions = [];
+  bool _isLoading = false;
+  OverlayEntry? _overlayEntry;
+  final LayerLink _layerLink = LayerLink();
+
 
   @override
   void initState() {
     super.initState();
+    _searchFocusNode.addListener(_onFocusChange); // ▶️ ADD THIS
     _focusNode.addListener(() {
       setState(() {
         _isFocused = _focusNode.hasFocus;
@@ -45,11 +66,7 @@ class _MainLayoutState extends State<MainLayout> {
     });
   }
 
-  @override
-  void dispose() {
-    _focusNode.dispose();
-    super.dispose();
-  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -63,8 +80,10 @@ class _MainLayoutState extends State<MainLayout> {
     final primaryColor = Theme
         .of(context)
         .primaryColor;
-    final backgroundGray =    Color(0xFFF5F8FA);
-    final initials = context.watch<TopNavProvider>().initials;
+    final backgroundGray = Color(0xFFF5F8FA);
+    final initials = context
+        .watch<TopNavProvider>()
+        .initials;
     return Scaffold(
       backgroundColor: backgroundGray,
       body: Row(
@@ -78,7 +97,7 @@ class _MainLayoutState extends State<MainLayout> {
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withOpacity(0.1),
-                    offset:    Offset(2, 0), // Right-side shadow
+                    offset: Offset(2, 0), // Right-side shadow
                     blurRadius: 4,
                   ),
                 ],
@@ -95,8 +114,8 @@ class _MainLayoutState extends State<MainLayout> {
 
                       // ─── Logo inside Side Nav ───
                       Padding(
-                        padding:    EdgeInsets.symmetric(horizontal: 16),
-                          child: _buildLogo(),
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: _buildLogo(),
                       ),
                       SizedBox(height: 16),
                       Divider(
@@ -117,7 +136,7 @@ class _MainLayoutState extends State<MainLayout> {
 
                       // ─── Dashboard Button ───
                       Padding(
-                        padding:    EdgeInsets.symmetric(horizontal: 16),
+                        padding: EdgeInsets.symmetric(horizontal: 16),
                         child: _SideNavButton(
                           icon: Icons.home_filled,
                           label: 'Register Farm',
@@ -133,14 +152,14 @@ class _MainLayoutState extends State<MainLayout> {
 
                       // ─── Create Profile Button ───
                       Padding(
-                        padding:    EdgeInsets.symmetric(horizontal: 16),
+                        padding: EdgeInsets.symmetric(horizontal: 16),
                         child: _SideNavButton(
                           icon: Icons.devices_outlined,
                           label: 'Device Registration',
                           isActive: widget.activeIndex == 1,
                           onTap: () {
                             if (widget.activeIndex != 1) {
-                              context.go('/profile');
+                              context.go('/device-registration');
                             }
                           },
                         ),
@@ -149,7 +168,7 @@ class _MainLayoutState extends State<MainLayout> {
 
                       // ─── Saved Jobs ───
                       Padding(
-                        padding:    EdgeInsets.symmetric(horizontal: 16),
+                        padding: EdgeInsets.symmetric(horizontal: 16),
                         child: _SideNavButton(
                           icon: Icons.people_alt_outlined,
                           label: 'Profile',
@@ -165,7 +184,7 @@ class _MainLayoutState extends State<MainLayout> {
 
                       // ─── Job Alerts ───
                       Padding(
-                        padding:    EdgeInsets.symmetric(horizontal: 16),
+                        padding: EdgeInsets.symmetric(horizontal: 16),
                         child: _SideNavButton(
                           icon: Icons.settings,
                           label: 'Settings',
@@ -189,10 +208,10 @@ class _MainLayoutState extends State<MainLayout> {
                       ),
                       SizedBox(height: 8),
                       Padding(
-                        padding:    EdgeInsets.symmetric(horizontal: 16),
+                        padding: EdgeInsets.symmetric(horizontal: 16),
                         child: _LogoutButton(
-                          key:    ValueKey('nav_logout'),
-                          onTap: () async{
+                          key: ValueKey('nav_logout'),
+                          onTap: () async {
                             // handle logout
                             await FirebaseAuth.instance.signOut();
                             context.pushReplacement('/login');
@@ -213,17 +232,17 @@ class _MainLayoutState extends State<MainLayout> {
               children: [
                 // ─── Top Bar (Search, Notification, Avatar) ───
                 if (widget.activeIndex == 0)
-                  _buildTopBar(primaryColor, initials),
+                  _buildtopbar(primaryColor, initials),
                 // ─── Main Content Area ────────────────────────
                 Expanded(
                   child: AnimatedSwitcher(
-                    duration:    Duration(milliseconds: 300),
+                    duration: Duration(milliseconds: 300),
                     transitionBuilder: (child, animation) {
                       return FadeTransition(
                         opacity: animation,
                         child: SlideTransition(
                           position: Tween<Offset>(
-                            begin:    Offset(0.0, 0.1),
+                            begin: Offset(0.0, 0.1),
                             end: Offset.zero,
                           ).animate(animation),
                           child: child,
@@ -241,11 +260,10 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
-
   Widget _buildLogo() {
     return MouseRegion(
       child: GestureDetector(
-        onTap: () =>(),
+        onTap: () => (),
         child: Row(
           children: [
             SizedBox(width: 2,),
@@ -266,261 +284,576 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
-  Widget _buildTopBar(Color primaryColor, String initials) {
+
+
+
+
+// Consolidated tool section with better state management
+  Widget _buildToolSection() {
+    return Consumer<MapDrawingProvider>(
+      builder: (context, provider, _) {
+        final tools = [
+          {'icon': Icons.brush, 'tool': 'freehand', 'tooltip': 'Draw'},
+          {'icon': Icons.crop_square, 'tool': 'rectangle', 'tooltip': 'Rectangle'},
+          {'icon': Icons.place, 'tool': 'marker', 'tooltip': 'Marker'},
+          {'icon': Icons.front_hand, 'tool': 'hand', 'tooltip': 'Pan'},
+        ];
+
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: tools.map((tool) => _buildToolButton(
+            icon: tool['icon'] as IconData,
+            tool: tool['tool'] as String,
+            tooltip: tool['tooltip'] as String,
+            isSelected: provider.currentTool == tool['tool'],
+            onPressed: () => provider.setCurrentTool(tool['tool'] as String),
+          )).toList(),
+        );
+      },
+    );
+  }
+
+// Enhanced tool button with better animations and accessibility
+  Widget _buildToolButton({
+    required IconData icon,
+    required String tool,
+    required String tooltip,
+    required bool isSelected,
+    required VoidCallback onPressed,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4.0),
+      child: Tooltip(
+        message: tooltip,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(12),
+            splashColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.primary.withOpacity(0.2),
+                  width: 1.5,
+                ),
+                boxShadow: isSelected ? [
+                  BoxShadow(
+                    color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  ),
+                ] : null,
+              ),
+              child: Icon(
+                icon,
+                color: isSelected
+                    ? Theme.of(context).colorScheme.onPrimary
+                    : Theme.of(context).colorScheme.primary,
+                size: 18,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+// Main consolidated top bar with enhanced UX
+  Widget _buildtopbar(Color primaryColor, String initials) {
     return Container(
       height: 70,
       width: 800,
       decoration: BoxDecoration(
-        color: _cardWhite,
-        borderRadius:    BorderRadius.only(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: const BorderRadius.only(
           bottomLeft: Radius.circular(16),
           bottomRight: Radius.circular(16),
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withOpacity(0.08),
             blurRadius: 12,
-            offset:    Offset(0, 4),
-          ),
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 6,
-            offset:    Offset(0, 2),
+            offset: const Offset(0, 4),
           ),
         ],
         border: Border(
           bottom: BorderSide(
-            color: _borderColor,
+            color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
             width: 1,
           ),
         ),
       ),
-      padding:    EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       child: Row(
         children: [
-          // ─── Enhanced Search Field ───
+          // Left section: Tools + Search
           Expanded(
-            flex: 2,
-            child: Container(
-              height: 48,
-              constraints:    BoxConstraints(maxWidth: 480),
-              decoration: BoxDecoration(
-                color: _isSearchFocused ? _cardWhite : _hoverColor,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: _isSearchFocused ? primaryColor : _borderColor,
-                  width: _isSearchFocused ? 2 : 1,
-                ),
-                boxShadow: _isSearchFocused
-                    ? [
-                  BoxShadow(
-                    color: primaryColor.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset:    Offset(0, 2),
-                  ),
-                ]
-                    : null,
-              ),
-              child: TextField(
-                controller: _searchController,
-                focusNode: _searchFocusNode,
-                style: GoogleFonts.inter(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  color: _textPrimary,
-                  height: 1.2,
-                ),
-                decoration: InputDecoration(
-                  filled: false,
-                  prefixIcon: Icon(
-                    Icons.search_rounded,
-                    color: _isSearchFocused ? primaryColor : _textSecondary,
-                    size: 20,
-                  ),
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                    onPressed: () {
-                      _searchController.clear();
-                      setState(() {});
-                    },
-                    icon: Icon(
-                      Icons.close_rounded,
-                      color: _textSecondary,
-                      size: 18,
-                    ),
-                    splashRadius: 16,
-                  )
-                      : null,
-                  hintText: 'Search jobs, companies, or keywords...',
-                  hintStyle:  GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                    color: _textSecondary,
-                    height: 1.2,
-                  ),
-                  border: InputBorder.none,
-                  contentPadding:    EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                ),
-                onChanged: (value) => setState(() {}),
-                onSubmitted: (value) {
-                  debugPrint('Search: $value');
-                },
-              ),
+            flex: 6, // Increased flex to make search area longer
+            child: Row(
+              children: [
+                // Consolidated tool buttons
+                _buildToolSection(),
+                const SizedBox(width: 20),
+                // Enhanced search bar - takes more space now
+                Expanded(child: _buildSearchWidget()),
+              ],
             ),
           ),
-
-          Spacer(),
-
-          // ─── Quick Actions ───
-          Row(
-            children: [
-              // Notifications with badge
-              _buildIconButton(
-                icon: Icons.notifications_none_rounded,
-                onPressed: () => _showNotifications(context),
-                badge: 3, // Example badge count
-              ),
-
-              SizedBox(width: 12),
-
-              // Messages
-              _buildIconButton(
-                icon: Icons.chat_bubble_outline_rounded,
-                onPressed: () => _showMessages(context),
-              ),
-
-              SizedBox(width: 16),
-
-              // Profile Menu
-              _buildProfileMenu(primaryColor, initials),
-            ],
-          ),
+          // Right section: Actions + Profile
+          _buildActionsSection(primaryColor, initials),
         ],
       ),
     );
   }
+// ------------------- WIDGET BUILD METHODS -------------------
 
-  Widget _buildIconButton({
-    required IconData icon,
-    required VoidCallback onPressed,
-    int? badge,
-  }) {
-    return Stack(
-      children: [
-        IconButton(
-          onPressed: onPressed,
-          icon: Icon(
-            icon,
-            color: _textSecondary,
-            size: 30,
-          ),
-          splashRadius: 20,
-          tooltip: 'Notifications',
-        ),
-        if (badge != null && badge > 0)
-          Positioned(
-            right: 8,
-            top: 8,
-            child: Container(
-              padding:    EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: Colors.red.shade500,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              constraints:BoxConstraints(
-                minWidth: 20,
-                minHeight: 20,
-              ),
-              child: Text(
-                badge > 99 ? '99+' : badge.toString(),
-                style:     GoogleFonts.inter(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-      ],
+  Widget _buildSearchWidget() {
+    return CompositedTransformTarget(
+      link: _layerLink,
+      child: _buildSearchBar(),
     );
   }
 
+  Widget _buildSearchBar() {
+    return Container(
+      height: 44,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: _searchFocusNode.hasFocus
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.primary.withOpacity(0.3),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 16),
+          Icon(
+            Icons.search_rounded,
+            color: Theme.of(context).colorScheme.primary,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              focusNode: _searchFocusNode,
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+              decoration: InputDecoration(
+                hintText: "Search places...",
+                border: InputBorder.none,
+                filled: false,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onChanged: _searchPlaces,
+              onSubmitted: (value) {
+                if (value.trim().isNotEmpty && _predictions.isNotEmpty) {
+                  _onSuggestionTap(_predictions.first);
+                }
+              },
+            ),
+          ),
+          if (_isLoading)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            ),
+          const SizedBox(width: 16),
+        ],
+      ),
+    );
+  }
+  Widget _buildSearchSuggestionsList() {
+    return Material(
+      elevation: 20,
+      shadowColor: Colors.black.withOpacity(0.4),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 400, // Fixed width - adjust as needed
+        constraints: const BoxConstraints(
+          maxHeight: 300,
+          minHeight: 50,
+          maxWidth: 400, // Ensure maximum width
+          minWidth: 300, // Ensure minimum width
+        ),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+            width: 1,
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Scrollbar(
+            controller: _scrollController,
+            thumbVisibility: true,
+            thickness: 6,
+            radius: const Radius.circular(3),
+            child: ListView.separated(
+              controller: _scrollController,
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              itemCount: _predictions.length,
+              physics: const BouncingScrollPhysics(),
+              separatorBuilder: (_, __) => Divider(
+                height: 1,
+                indent: 48,
+                endIndent: 16,
+                color: Theme.of(context).colorScheme.primary.withOpacity(0.08),
+              ),
+              itemBuilder: (context, index) {
+                return _buildSuggestionItem(_predictions[index], index);
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showOverlay() {
+    // If overlay already exists, do nothing.
+    if (_overlayEntry != null) return;
+    // If there are no predictions, do nothing.
+    if (_predictions.isEmpty) return;
+
+    _overlayEntry = OverlayEntry(
+      builder: (context) {
+        // Wrap the Follower in a Positioned widget to add extra constraints
+        return Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Material(
+            color: Colors.transparent,
+            child: Stack(
+              children: [
+                // Invisible barrier to detect taps outside
+                GestureDetector(
+                  onTap: () {
+                    _removeOverlay();
+                    _searchFocusNode.unfocus();
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    height: double.infinity,
+                    color: Colors.transparent,
+                  ),
+                ),
+                // The actual suggestions
+                CompositedTransformFollower(
+                  link: _layerLink,
+                  showWhenUnlinked: false,
+                  offset: const Offset(0, 52), // Position below search bar
+                  child: Container(
+                    // Additional container for size constraints
+                    constraints: const BoxConstraints(
+                      maxWidth: 400,
+                      maxHeight: 300,
+                    ),
+                    child: _buildSearchSuggestionsList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    Overlay.of(context).insert(_overlayEntry!);
+  }
+
+
+
+
+
+
+
+  Widget _buildSuggestionItem(dynamic prediction, int index) {
+    final secondary = _getSecondaryText(prediction.description ?? "");
+
+    // The InkWell handles both the tap and the visual feedback.
+    // A wrapping GestureDetector is not needed.
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          _onSuggestionTap(prediction);
+        },
+        borderRadius: BorderRadius.circular(8),
+        hoverColor: Theme.of(context).colorScheme.primary.withOpacity(0.08),
+        splashColor: Theme.of(context).colorScheme.primary.withOpacity(0.15),
+        mouseCursor: SystemMouseCursors.click,
+        child: AnimatedContainer(
+          duration: Duration(milliseconds: 100 + (index * 30)),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Icon(
+                Icons.location_on_outlined,
+                size: 16,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _getMainText(prediction.description ?? ""),
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (secondary.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 1),
+                        child: Text(
+                          secondary,
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w400,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withOpacity(0.6),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(
+                Icons.north_west_rounded,
+                size: 12,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.4),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _onFocusChange() {
+    // Update the border color of the search bar
+    setState(() {});
+
+    // If we are losing focus, we must delay removing the overlay.
+    // This gives the onTap event of a suggestion item enough time to
+    // process before the overlay is removed from the widget tree.
+    if (!_searchFocusNode.hasFocus) {
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) {
+          _removeOverlay();
+        }
+      });
+    }
+  }
+
+  void _searchPlaces(String input) {
+    _searchDebounceTimer?.cancel();
+
+    if (input.isEmpty) {
+      setState(() => _predictions = []);
+      _removeOverlay();
+      return;
+    }
+
+    _searchDebounceTimer = Timer(const Duration(milliseconds: 300), () async {
+      if (!mounted) return;
+      setState(() => _isLoading = true);
+
+      try {
+        final response = await places.autocomplete(input);
+        if (mounted) {
+          if (response.isOkay && response.predictions.isNotEmpty) {
+            setState(() => _predictions = response.predictions);
+            _showOverlay(); // Show suggestions on success
+          } else {
+            debugPrint("Places Autocomplete error: ${response.errorMessage}");
+            setState(() => _predictions = []);
+            _removeOverlay(); // Hide on error
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          debugPrint("Search error: $e");
+          setState(() => _predictions = []);
+          _removeOverlay(); // Hide on exception
+        }
+      } finally {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    });
+  }
+
+  void _onSuggestionTap(Prediction prediction) async {
+    if (_isLoading) return; // Prevent multiple taps
+
+    // 1. Immediately remove the overlay and unfocus the search bar
+    _removeOverlay();
+    _searchFocusNode.unfocus();
+
+    // 2. Update UI to show loading and the selected place name
+    setState(() {
+      _controller.text = prediction.description ?? '';
+      _predictions = [];
+      _isLoading = true;
+    });
+
+    try {
+      // 3. Fetch details and move the camera
+      final latLng = await _getLatLngFromPlaceId(prediction.placeId!);
+      if (latLng == null) return; // Error handled in finally
+
+      final provider = Provider.of<MapDrawingProvider>(context, listen: false);
+      if (provider.mapController != null) {
+        await provider.mapController!.animateCamera(
+          CameraUpdate.newLatLngZoom(latLng, 16),
+        );
+      }
+    } catch (e) {
+      debugPrint("Error navigating to place: $e");
+    } finally {
+      // 4. Stop loading indicator
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+
+
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+
+  String _getMainText(String description) {
+    if (description.contains(',')) {
+      return description.split(',').first.trim();
+    }
+    return description;
+  }
+
+  String _getSecondaryText(String description) {
+    if (description.contains(',')) {
+      final parts = description.split(',');
+      if (parts.length > 1) {
+        return parts.sublist(1).join(',').trim();
+      }
+    }
+    return '';
+  }
+
+  Future<LatLng?> _getLatLngFromPlaceId(String placeId) async {
+    final detail = await places.getDetailsByPlaceId(placeId);
+    if (detail.isOkay) {
+      final loc = detail.result.geometry?.location;
+      if (loc != null) return LatLng(loc.lat, loc.lng);
+    }
+    return null;
+  }
+
+
+
+
+
+
+
+
+// Enhanced profile menu with theme consistency
   Widget _buildProfileMenu(Color primaryColor, String initials) {
     return PopupMenuButton<String>(
-      offset:    Offset(0, 8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
+      offset: const Offset(0, 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      tooltip: 'Profile Menu',
       child: Container(
-        padding:    EdgeInsets.all(2),
+        padding: const EdgeInsets.all(2),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(22),
           border: Border.all(
-            color: _borderColor,
+            color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
             width: 2,
           ),
         ),
         child: CircleAvatar(
           radius: 18,
-          backgroundColor: primaryColor,
+          backgroundColor: Theme.of(context).colorScheme.primary,
           child: Text(
             initials.isNotEmpty ? initials : 'ZA',
-            style:     GoogleFonts.inter(
+            style: GoogleFonts.inter(
               fontSize: 14,
               fontWeight: FontWeight.w600,
-              color: Colors.white,
+              color: Theme.of(context).colorScheme.onPrimary,
             ),
           ),
         ),
       ),
-      itemBuilder: (context) =>
-      [
-        _buildPopupMenuItem('Profile', Icons.person_outline_rounded, () {
-          context.go('/profile');
-        }),
-        _buildPopupMenuItem('Settings', Icons.settings_outlined, () {
-          // Handle settings
-        }),
-        _buildPopupMenuItem('Help', Icons.help_outline_rounded, () {
-          // Handle help
-        }),
-        PopupMenuDivider(),
-        PopupMenuItem<String>(
-          value: 'logout',
-          onTap: () {
-            _showLogoutDialog(context);
-          },
-          child: Row(
-            children: [
-              Icon(
-                Icons.logout_rounded,
-                size: 18,
-                color: Colors.red.shade500,
-              ),
-              SizedBox(width: 12),
-              Flexible(
-                child: Text(
-                  'Logout',
-                  overflow: TextOverflow.ellipsis,
-                  style:  GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.red,
-                  ),
-                ),
-              ),
-            ],
-          ),
+      itemBuilder: (context) => [
+        _buildMenuItem('Device Registration', Icons.devices_outlined, () => context.go('/device-registration')),
+        _buildMenuItem('Settings', Icons.settings_outlined, () {}),
+        _buildMenuItem('Help', Icons.help_outline_rounded, () {}),
+        const PopupMenuDivider(),
+        _buildMenuItem(
+          'Logout',
+          Icons.logout_rounded,
+              () => _showLogoutDialog(context),
+          isDestructive: true,
         ),
       ],
     );
   }
-
-  PopupMenuItem<String> _buildPopupMenuItem(String title,
+// Streamlined menu item builder
+  PopupMenuItem<String> _buildMenuItem(
+      String title,
       IconData icon,
       VoidCallback onTap, {
         bool isDestructive = false,
@@ -533,112 +866,33 @@ class _MainLayoutState extends State<MainLayout> {
           Icon(
             icon,
             size: 18,
-            color: isDestructive ? Colors.red.shade500 : _textSecondary,
+            color: isDestructive
+                ? Colors.red.shade500
+                : Theme.of(context).colorScheme.primary,
           ),
-          SizedBox(width: 12),
-          Flexible(
-            child: Text(
-              title,
-              overflow: TextOverflow.ellipsis,
-              style:  GoogleFonts.inter(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: isDestructive ? Colors.red.shade500 : _textPrimary,
-              ),
+          const SizedBox(width: 12),
+          Text(
+            title,
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: isDestructive
+                  ? Colors.red.shade500
+                  : Theme.of(context).colorScheme.onSurface,
             ),
           ),
         ],
       ),
     );
   }
-
-  void _showNotifications(BuildContext context) {
-    // Placeholder: show a bottom sheet or dialog
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title:    Text('Notifications'),
-        content:    Text('You have new notifications.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child:    Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showMessages(BuildContext context) {
-    // Placeholder: show a bottom sheet or dialog
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title:    Text('Messages'),
-        content:    Text('You have new messages.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child:    Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showLogoutDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) =>
-          AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            title:    Text(
-              'Confirm Logout',
-              style:  GoogleFonts.inter(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            content:    Text(
-              'Are you sure you want to logout?',
-              style:  GoogleFonts.inter(
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child:    Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: ()async {
-
-                  await FirebaseAuth.instance.signOut();
-                  context.pushReplacement('/login');
-
-                },
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.red,
-                ),
-                child:    Text('Logout'),
-              ),
-            ],
-          ),
-    );
-  }
-
   Widget _buildUserProfileSection(Color primaryColor) {
     return Container(
-      margin:    EdgeInsets.symmetric(horizontal: 10),
-      padding:    EdgeInsets.all(10),
+      margin: EdgeInsets.symmetric(horizontal: 10),
+      padding: EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: primaryColor.withOpacity(0.05),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: primaryColor.withOpacity(0.1),
-          width: 1,
-        ),
+        border: Border.all(color: primaryColor.withOpacity(0.1), width: 1),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -648,38 +902,25 @@ class _MainLayoutState extends State<MainLayout> {
               Container(
                 width: 48,
                 height: 48,
-                decoration: BoxDecoration(
-                  color: primaryColor,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child:    Icon(
-                  Icons.person_rounded,
-                  color: Colors.white,
-                  size: 24,
-                ),
+                decoration: BoxDecoration(color: primaryColor,
+                    borderRadius: BorderRadius.circular(12)),
+                child: Icon(
+                    Icons.person_rounded, color: Colors.white, size: 24),
               ),
               SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Zain Ali',
-                      style:  GoogleFonts.inter(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: _textPrimary,
-                      ),
-                    ),
+                    Text('Zain Ali',
+                        style: GoogleFonts.inter(fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: _textPrimary)),
                     SizedBox(height: 2),
-                    Text(
-                      'Full Stack Developer',
-                      style:  GoogleFonts.inter(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: _textSecondary,
-                      ),
-                    ),
+                    Text('Victoria, Australia',
+                        style: GoogleFonts.inter(fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: _textSecondary)),
                   ],
                 ),
               ),
@@ -689,31 +930,204 @@ class _MainLayoutState extends State<MainLayout> {
           SizedBox(
             width: double.infinity,
             child: TextButton(
-              onPressed: () => context.go('/profile'),
+              onPressed: () => context.go('/device-registration'),
               style: TextButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: primaryColor,
-                padding:    EdgeInsets.symmetric(vertical: 8),
+                padding: EdgeInsets.symmetric(vertical: 8),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                    borderRadius: BorderRadius.circular(8)),
               ),
-              child:    Text(
-                'View Profile',
-                style:  GoogleFonts.inter(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+              child: Text('Buy Devices', style: GoogleFonts.inter(
+                  fontSize: 14, fontWeight: FontWeight.w600)),
             ),
           ),
         ],
       ),
     );
   }
+// Consolidated actions section
+  Widget _buildActionsSection(Color primaryColor, String initials) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildActionButton(
+          icon: Icons.notifications_none_rounded,
+          onPressed: () => _showNotifications(context),
+          badge: 3,
+          tooltip: 'Notifications',
+        ),
+        const SizedBox(width: 8),
+        _buildActionButton(
+          icon: Icons.chat_bubble_outline_rounded,
+          onPressed: () => _showMessages(context),
+          tooltip: 'Messages',
+        ),
+        const SizedBox(width: 16),
+        _buildProfileMenu(primaryColor, initials),
+      ],
+    );
+  }
+// Enhanced action button with better visual feedback
+  Widget _buildActionButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    required String tooltip,
+    int? badge,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onPressed,
+              borderRadius: BorderRadius.circular(20),
+              splashColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Icon(
+                  icon,
+                  color: Theme.of(context).colorScheme.primary,
+                  size: 24,
+                ),
+              ),
+            ),
+          ),
+          if (badge != null && badge > 0)
+            Positioned(
+              right: 4,
+              top: 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade500,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                child: Text(
+                  badge > 99 ? '99+' : badge.toString(),
+                  style: GoogleFonts.inter(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+// Enhanced dialogs with consistent theming
+  void _showNotifications(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Notifications',
+          style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+        ),
+        content: Text(
+          'You have new notifications.',
+          style: GoogleFonts.inter(fontWeight: FontWeight.w400),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              'Close',
+              style: TextStyle(color: Theme.of(context).colorScheme.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showMessages(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Messages',
+          style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+        ),
+        content: Text(
+          'You have new messages.',
+          style: GoogleFonts.inter(fontWeight: FontWeight.w400),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              'Close',
+              style: TextStyle(color: Theme.of(context).colorScheme.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLogoutDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Confirm Logout',
+          style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+        ),
+        content: Text(
+          'Are you sure you want to logout?',
+          style: GoogleFonts.inter(fontWeight: FontWeight.w400),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              'Cancel',
+              style: TextStyle(color: Theme.of(context).colorScheme.primary),
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              try {
+                await FirebaseAuth.instance.signOut();
+                if (context.mounted) {
+                  context.pushReplacement('/login');
+                }
+              } catch (e) {
+                debugPrint("Logout error: $e");
+              }
+            },
+            child: const Text('Logout', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+// Don't forget to dispose resources to prevent memory leaks
+  @override
+  void dispose() {
+    _searchFocusNode.removeListener(_onFocusChange); // ▶️ ADD THIS
+    _focusNode.dispose();
+    _searchDebounceTimer?.cancel();
+    _searchFocusNode.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+
+
 }
-/// Single navigation button in the side-rail.
-/// Highlights itself if isActive == true.
 class _SideNavButton extends StatefulWidget {
   final IconData icon;
   final String label;
